@@ -87,11 +87,19 @@
     "saved": "Saved (v{version})",
     "savedToast": "Agent saved (v{version})"
   },
-  "skills": {
+  "skillsTab": {
     "title": "Skills",
-    "enabledCount": "{linked} of {total} enabled",
+    "enabledCount": "{enabled} of {total} enabled",
     "filterPlaceholder": "Filter skills…",
-    "orderHint": "Order matters — earlier skills appear earlier in the assembled prompt. Toggle to attach."
+    "orderHint": "Order matters — earlier skills appear earlier in the assembled prompt. Drag to reorder.",
+    "reorder": "Reorder {name}",
+    "reorderHint": "Drag, or press ↑/↓, to reorder",
+    "globallyOff": "off globally",
+    "noMatch": "No skills match the filter.",
+    "loadError": "Could not load skills.",
+    "emptyTitle": "No skills in this workspace",
+    "emptyBody": "Create or import a skill, then attach it to this agent.",
+    "emptyCta": "Create a skill"
   },
   "mount": {
     "body": "Mount point for {owner}. The Agent Editor shell + tab routing are wired by A2 — {owner} renders this tab."

@@ -1,0 +1,11 @@
+/* EvalsTab — placeholder: the server has no eval module yet (M3). */
+"use client";
+
+import React from "react";
+import { useTranslations } from "next-intl";
+import { EmptyState } from "@devdigest/ui";
+
+export function EvalsTab() {
+  const t = useTranslations("skills");
+  return <EmptyState icon="FlaskConical" title={t("evals.title")} body={t("evals.body")} />;
+}

@@ -1,6 +1,13 @@
-import type { Agent, AgentVersion, CiFailOn, Provider, ReviewStrategy } from '@devdigest/shared';
+import type {
+  Agent,
+  AgentSkillItem,
+  AgentVersion,
+  CiFailOn,
+  Provider,
+  ReviewStrategy,
+} from '@devdigest/shared';
 import { AgentVersionConfig } from '@devdigest/shared';
-import type { AgentRow, AgentVersionRow } from './repository.js';
+import type { AgentRow, AgentVersionRow, LinkedSkillRow } from './repository.js';
 
 /**
  * Pure helpers for the agents module — DB row ⇄ DTO mapping and the
@@ -38,6 +45,26 @@ export function toAgentVersionDto(row: AgentVersionRow): AgentVersion {
     version: row.version,
     config: AgentVersionConfig.parse(row.configJson),
     created_at: row.createdAt.toISOString(),
+  };
+}
+
+/** Map a joined agent_skills + skills row to the agent Skills-tab item. */
+export function toAgentSkillItemDto(link: LinkedSkillRow): AgentSkillItem {
+  const s = link.skill;
+  return {
+    skill: {
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      type: s.type,
+      source: s.source,
+      body: s.body,
+      enabled: s.enabled,
+      version: s.version,
+      evidence_files: s.evidenceFiles ?? null,
+    },
+    order: link.order,
+    enabled: link.enabled,
   };
 }
 

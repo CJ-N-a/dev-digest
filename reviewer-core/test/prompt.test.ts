@@ -64,3 +64,35 @@ describe('assemblePrompt — ## PR description', () => {
     expect((assembly.pr_description as string).length).toBe(4000);
   });
 });
+
+describe('assemblePrompt — skills (M2)', () => {
+  it('renders structured skills under ## Skills / rules and records tokens + skills_used', () => {
+    const a = { name: 'no-secrets', version: 2, text: '### Skill: no-secrets (rule)\nNo keys.\n\nBody A' };
+    const b = { name: 'sql-safety', version: 1, text: '### Skill: sql-safety (rule)\nSQL.\n\nBody B' };
+    const { messages, assembly } = assemblePrompt({ system: 'sys', diff: 'DIFF', skills: [a, b] });
+    const block = `${a.text}\n\n${b.text}`;
+    expect(messages[1]!.content).toContain(`## Skills / rules\n${block}`);
+    expect(messages[0]!.content).not.toContain('Body A');
+    expect(assembly.skills).toBe(block);
+    expect(assembly.skills_tokens).toBe(Math.ceil(block.length / 4));
+    expect(assembly.skills_used).toEqual([
+      { name: 'no-secrets', version: 2, tokens: Math.ceil(a.text.length / 4) },
+      { name: 'sql-safety', version: 1, tokens: Math.ceil(b.text.length / 4) },
+    ]);
+  });
+
+  it('keeps plain string skills working (skills_used null, tokens counted)', () => {
+    const { assembly } = assemblePrompt({ system: 'sys', diff: 'DIFF', skills: ['abcde'] });
+    expect(assembly.skills).toBe('abcde');
+    expect(assembly.skills_tokens).toBe(2);
+    expect(assembly.skills_used).toBeNull();
+  });
+
+  it('no skills → section omitted, tokens and list null', () => {
+    const { messages, assembly } = assemblePrompt({ system: 'sys', diff: 'DIFF', skills: [] });
+    expect(messages[1]!.content).not.toContain('## Skills / rules');
+    expect(assembly.skills).toBeNull();
+    expect(assembly.skills_tokens).toBeNull();
+    expect(assembly.skills_used).toBeNull();
+  });
+});

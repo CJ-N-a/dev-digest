@@ -4,9 +4,9 @@ import { reviewPullRequest, countBlockers } from '@devdigest/reviewer-core';
 import { RunLogger } from '../../platform/run-logger.js';
 import * as schema from '../../db/schema.js';
 import type { AgentRow } from '../../db/rows.js';
-import type { ReviewRepository, FindingRow, PullRow, ReviewRow } from './repository.js';
+import type { ReviewRepository, FindingRow, PullRow, ReviewRow, RunSkillRow } from './repository.js';
 import { REVIEW_STRATEGY } from './constants.js';
-import { taskLine } from './helpers.js';
+import { runSkillRows, skillsLogLine, taskLine, toPromptSkills } from './helpers.js';
 import { loadDiff } from './diff-loader.js';
 
 /** Thrown by a run when the user cancels it mid-flight (between map files). */
@@ -152,7 +152,26 @@ export class ReviewRunExecutor {
 
     runLog.info(`Starting review with agent "${agent.name}" (${agent.provider}/${agent.model})`);
 
+    // M2 — skills snapshot for agent_run_skills; written on done AND on
+    // failed/cancelled (once loaded) so the history shows what was in the prompt.
+    let runSkills: RunSkillRow[] = [];
+    // Best-effort: a failed snapshot must never flip a finished run to failed.
+    const persistRunSkills = async () => {
+      if (runSkills.length === 0) return;
+      try {
+        await this.repo.insertRunSkills(runId, runSkills);
+      } catch (err) {
+        runLog.info(`skills: failed to record run skills — ${(err as Error).message}`);
+      }
+    };
+
     try {
+      // M2 — the agent's skills (skill AND link enabled), in agent_skills order.
+      const loadedSkills = await this.repo.listPromptSkillsForAgent(workspaceId, agent.id);
+      const promptSkills = toPromptSkills(loadedSkills);
+      runSkills = runSkillRows(loadedSkills);
+      runLog.info(skillsLogLine(promptSkills));
+
       // Resolve the agent's LLM provider. (container.llm throws if the provider
       // key is missing — caught below and persisted as a failed run.)
       const llm = await runLog.step(
@@ -195,6 +214,8 @@ export class ReviewRunExecutor {
         // Per-agent review strategy (configured in the Agent editor); falls back
         // to the studio default. single-pass = whole diff in one call.
         strategy: agent.strategy ?? REVIEW_STRATEGY,
+        // M2 — formatted skill blocks; the engine puts them in every call.
+        ...(promptSkills.length > 0 ? { skills: promptSkills } : {}),
         // T1.3 — pass the callers digest only when we built one. assemblePrompt
         // omits the section when this is empty/undefined.
         ...(callersDigest ? { callers: callersDigest } : {}),
@@ -253,6 +274,7 @@ export class ReviewRunExecutor {
         blockers,
         error: null,
       });
+      await persistRunSkills();
 
       const trace: RunTrace = {
         config: {
@@ -307,6 +329,7 @@ export class ReviewRunExecutor {
           error: msg,
         })
         .catch(() => undefined);
+      await persistRunSkills();
       await this.repo
         .saveRunTrace(runId, this.traceFromBuffer(runId, pull, agent, '0/0 passed', Date.now() - start))
         .catch(() => undefined);

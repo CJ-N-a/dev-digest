@@ -19,6 +19,7 @@ Reusable AI skills that provide specialized knowledge and workflows. Canonical l
 | [security](security/SKILL.md) | Full-stack | OWASP Top 10:2025, auth, injection, uploads, secrets |
 | [mermaid-diagram](mermaid-diagram/SKILL.md) | Shared | Mermaid diagrams in markdown (flowcharts, sequence, ERD, …) |
 | [engineering-insights](engineering-insights/SKILL.md) | Shared | Read the module's INSIGHTS.md at task start; record verified, non-obvious findings at task end |
+| [pr-self-review](pr-self-review/SKILL.md) | Shared | `/pr-self-review` only (`disable-model-invocation: true`): branch diff vs main → loads frontend/backend skills for changed packages → checklist review |
 
 ## What Are Skills?
 

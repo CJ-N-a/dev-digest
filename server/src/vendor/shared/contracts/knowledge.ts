@@ -188,6 +188,8 @@ export const Agent = z.object({
   // Inject repo-intel context (repo skeleton + callers + rank note) into this
   // agent's review prompt. Default on; gated again by the global flag.
   repo_intel: z.boolean().default(true),
+  // M2 — number of enabled skill links (filled by GET /agents).
+  skills_count: z.number().int().optional(),
 });
 export type Agent = z.infer<typeof Agent>;
 

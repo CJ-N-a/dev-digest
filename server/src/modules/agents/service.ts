@@ -1,6 +1,7 @@
 import type { Container } from '../../platform/container.js';
 import type {
   Agent,
+  AgentSkillItem,
   AgentSkillLink,
   AgentVersion,
   CiFailOn,
@@ -9,7 +10,8 @@ import type {
   ReviewStrategy,
 } from '@devdigest/shared';
 import { AgentsRepository } from './repository.js';
-import { toAgentDto, toAgentVersionDto } from './helpers.js';
+import { ValidationError } from '../../platform/errors.js';
+import { toAgentDto, toAgentSkillItemDto, toAgentVersionDto } from './helpers.js';
 
 /**
  * A2 — agents service. Business logic for the Agents tab + Agent Editor.
@@ -56,8 +58,11 @@ export class AgentsService {
   }
 
   async list(workspaceId: string): Promise<Agent[]> {
-    const rows = await this.repo.list(workspaceId);
-    return rows.map(toAgentDto);
+    const [rows, counts] = await Promise.all([
+      this.repo.list(workspaceId),
+      this.repo.enabledSkillCounts(workspaceId),
+    ]);
+    return rows.map((row) => ({ ...toAgentDto(row), skills_count: counts.get(row.id) ?? 0 }));
   }
 
   async get(workspaceId: string, id: string): Promise<Agent | undefined> {
@@ -141,6 +146,41 @@ export class AgentsService {
     return links.map((l) => ({ agent_id: agentId, skill_id: l.skill.id, order: l.order }));
   }
 
+  /** Linked skills with their order and per-agent flag (agent Skills tab). */
+  async skillItems(workspaceId: string, agentId: string): Promise<AgentSkillItem[] | undefined> {
+    const agent = await this.repo.getById(workspaceId, agentId);
+    if (!agent) return undefined;
+    const links = await this.repo.linkedSkills(agentId);
+    return links.map(toAgentSkillItemDto);
+  }
+
+  /**
+   * Replace the agent's ordered skill set (array index = order) with per-agent
+   * flags, in one transaction. Every skill must belong to the workspace.
+   */
+  async replaceSkills(
+    workspaceId: string,
+    agentId: string,
+    items: { skill_id: string; enabled: boolean }[],
+  ): Promise<AgentSkillItem[] | undefined> {
+    const agent = await this.repo.getById(workspaceId, agentId);
+    if (!agent) return undefined;
+    await this.assertWorkspaceSkills(workspaceId, items.map((i) => i.skill_id));
+    await this.repo.replaceSkills(
+      agentId,
+      items.map((i) => ({ skillId: i.skill_id, enabled: i.enabled })),
+    );
+    return this.skillItems(workspaceId, agentId);
+  }
+
+  /** Reject duplicates and skills from another workspace (or unknown ids). */
+  private async assertWorkspaceSkills(workspaceId: string, skillIds: string[]): Promise<void> {
+    const unique = new Set(skillIds);
+    if (unique.size !== skillIds.length) throw new ValidationError('Duplicate skill in the list');
+    const found = await this.repo.countWorkspaceSkills(workspaceId, [...unique]);
+    if (found !== unique.size) throw new ValidationError('Unknown skill id');
+  }
+
   /**
    * Set / reorder the agent's linked skills. If `skillIds` is provided, replaces
    * the whole set in that order. Returns the resulting ordered links.
@@ -152,6 +192,7 @@ export class AgentsService {
   ): Promise<AgentSkillLink[] | undefined> {
     const agent = await this.repo.getById(workspaceId, agentId);
     if (!agent) return undefined;
+    await this.assertWorkspaceSkills(workspaceId, skillIds);
     await this.repo.setSkills(agentId, skillIds);
     return this.skillLinks(agentId);
   }
@@ -165,6 +206,7 @@ export class AgentsService {
   ): Promise<AgentSkillLink[] | undefined> {
     const agent = await this.repo.getById(workspaceId, agentId);
     if (!agent) return undefined;
+    await this.assertWorkspaceSkills(workspaceId, [skillId]);
     const existing = await this.repo.linkedSkills(agentId);
     const resolvedOrder = order ?? existing.length;
     await this.repo.linkSkill(agentId, skillId, resolvedOrder);

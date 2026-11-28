@@ -10,6 +10,7 @@ Hygiene: monthly `/engineering-insights review` (logged under Review log); split
 
 ## Mistakes
 - 2026-11-23 · The React warning "Updating a style property during rerender (borderColor) when a conflicting property is set (borderLeftColor)" in FindingsPanel tests comes from FindingCard, not the panel: `borderColor` is itself a 4-side shorthand, so the "all-longhand" fix in `s.card` still conflicts with `borderLeftColor`. It only fires when a card's `focused` flips on rerender (j/k, severity filter resets focusIdx); fix would be per-side colors (`borderTopColor`/`borderRightColor`/`borderBottomColor`) — old smoke tests never rerendered, so it looked new. Evidence: `client/src/app/repos/[repoId]/pulls/[number]/_components/FindingCard/styles.ts` (`s.card`)
+- 2026-11-28 · A runtime (non-type) import from `@devdigest/shared` passed tsc and vitest but broke `next dev` with "Module not found: Can't resolve './contracts/findings.js'" — vendor/shared imports siblings as `./x.js`; fixed with `webpack.resolve.extensionAlias { '.js': ['.ts','.tsx','.js'] }` in next.config.mjs. Before M2 the client only imported types from shared, so it never surfaced; check a new page in the real dev server, not only tests. Evidence: `client/next.config.mjs` (`webpack`), `client/src/vendor/shared/index.ts`
 
 ## Decisions
 

@@ -1,0 +1,89 @@
+diff --git a/src/app.ts b/src/app.ts
+index fc58f40..17959e4 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -4,41 +4,49 @@ import { findOrder, orderTotalCents } from './orders.js';
+ export function buildApp(): FastifyInstance {
+   const app = Fastify({ logger: false });
+ 
+-  app.get<{ Params: { id: number } }>(
+-    '/orders/:id',
++  app.get<{ Params: { orderId: string } }>(
++    '/orders/:orderId',
+     {
+       schema: {
+         params: {
+           type: 'object',
+-          required: ['id'],
+-          properties: { id: { type: 'integer', minimum: 1 } },
++          required: ['orderId'],
++          properties: { orderId: { type: 'string', pattern: '^ord_[0-9]+$' } },
+         },
+         response: {
+           200: {
+             type: 'object',
+-            required: ['id', 'customerId', 'status', 'totalCents'],
++            required: ['id', 'customer', 'status', 'amount'],
+             properties: {
+               id: { type: 'integer' },
+-              customerId: { type: 'string' },
++              customer: {
++                type: 'object',
++                required: ['id', 'tier'],
++                properties: { id: { type: 'string' }, tier: { type: 'string' } },
++              },
+               status: { type: 'string', enum: ['open', 'paid', 'shipped'] },
+-              totalCents: { type: 'integer' },
++              amount: {
++                type: 'object',
++                required: ['totalCents', 'currency'],
++                properties: { totalCents: { type: 'integer' }, currency: { type: 'string' } },
++              },
+             },
+           },
+         },
+       },
+     },
+     async (req, reply) => {
+-      const order = findOrder(req.params.id);
++      const order = findOrder(Number(req.params.orderId.slice('ord_'.length)));
+       if (!order) {
+         return reply
+           .code(404)
+-          .send({ error: { code: 'order_not_found', message: `Order ${req.params.id} not found` } });
++          .send({ error: { code: 'not_found', message: `Order ${req.params.orderId} not found` } });
+       }
+       return {
+         id: order.id,
+-        customerId: order.customerId,
++        customer: { id: order.customerId, tier: order.customerTier },
+         status: order.status,
+-        totalCents: orderTotalCents(order),
++        amount: { totalCents: orderTotalCents(order), currency: 'USD' },
+       };
+     },
+   );
+diff --git a/test/app.test.ts b/test/app.test.ts
+index 42cecd2..43adc84 100644
+--- a/test/app.test.ts
++++ b/test/app.test.ts
+@@ -1,11 +1,16 @@
+ import { describe, expect, it } from 'vitest';
+ import { buildApp } from '../src/app.js';
+ 
+-describe('GET /orders/:id', () => {
++describe('GET /orders/:orderId', () => {
+   it('returns the order with its total', async () => {
+     const app = buildApp();
+-    const res = await app.inject({ method: 'GET', url: '/orders/1' });
++    const res = await app.inject({ method: 'GET', url: '/orders/ord_1' });
+     expect(res.statusCode).toBe(200);
+-    expect(res.json()).toEqual({ id: 1, customerId: 'cus_ada', status: 'open', totalCents: 3_200 });
++    expect(res.json()).toEqual({
++      id: 1,
++      customer: { id: 'cus_ada', tier: 'standard' },
++      status: 'open',
++      amount: { totalCents: 3_200, currency: 'USD' },
++    });
+   });
+ });

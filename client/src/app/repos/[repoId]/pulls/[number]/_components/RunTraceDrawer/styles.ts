@@ -79,6 +79,17 @@ export const s = {
     overflow: "auto",
   } satisfies CSSProperties,
 
+  // ---- SkillsBlock ----
+  skillsList: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap",
+    padding: "0 12px 8px 29px",
+    margin: 0,
+    listStyle: "none",
+  } satisfies CSSProperties,
+  skillChip: { fontSize: 12, color: "var(--text-secondary)" } satisfies CSSProperties,
+
   // ---- Stat ----
   stat: {
     flex: 1,
