@@ -1,5 +1,5 @@
-import { and, asc, desc, eq } from 'drizzle-orm';
-import type { Db } from '../../db/client.js';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import type { Db, DbOrTx } from '../../db/client.js';
 import * as t from '../../db/schema.js';
 import type { CiFailOn, Provider, ReviewStrategy } from '@devdigest/shared';
 import { DEFAULT_AGENT_DESCRIPTION, INITIAL_AGENT_VERSION } from './constants.js';
@@ -46,6 +46,14 @@ export interface UpdateAgent {
 export interface LinkedSkillRow {
   skill: typeof t.skills.$inferSelect;
   order: number;
+  /** Per-agent switch (M2); a disabled link keeps its place in the order. */
+  enabled: boolean;
+}
+
+/** One entry of an agent's ordered skill set (array index = order). */
+export interface AgentSkillEntry {
+  skillId: string;
+  enabled: boolean;
 }
 
 export class AgentsRepository {
@@ -191,12 +199,12 @@ export class AgentsRepository {
   /** Skills linked to an agent, in `order` ascending. */
   async linkedSkills(agentId: string): Promise<LinkedSkillRow[]> {
     const rows = await this.db
-      .select({ skill: t.skills, order: t.agentSkills.order })
+      .select({ skill: t.skills, order: t.agentSkills.order, enabled: t.agentSkills.enabled })
       .from(t.agentSkills)
       .innerJoin(t.skills, eq(t.agentSkills.skillId, t.skills.id))
       .where(eq(t.agentSkills.agentId, agentId))
       .orderBy(asc(t.agentSkills.order));
-    return rows.map((r) => ({ skill: r.skill, order: r.order }));
+    return rows.map((r) => ({ skill: r.skill, order: r.order, enabled: r.enabled }));
   }
 
   async skillIdsForAgent(agentId: string): Promise<string[]> {
@@ -223,14 +231,55 @@ export class AgentsRepository {
 
   /**
    * Replace the full set of linked skills for an agent with `skillIds`, assigning
-   * order = index. Used by the "Skills" editor tab (attach/reorder). Skills not in
-   * the list are unlinked.
+   * order = index (legacy `POST /agents/:id/skills { skill_ids }`). Skills not in
+   * the list are unlinked; links that stay keep their per-agent `enabled` flag.
    */
   async setSkills(agentId: string, skillIds: string[]): Promise<void> {
-    await this.db.delete(t.agentSkills).where(eq(t.agentSkills.agentId, agentId));
-    if (skillIds.length === 0) return;
-    await this.db
+    await this.db.transaction(async (tx) => {
+      const existing = await tx
+        .select({ skillId: t.agentSkills.skillId, enabled: t.agentSkills.enabled })
+        .from(t.agentSkills)
+        .where(eq(t.agentSkills.agentId, agentId));
+      const enabled = new Map(existing.map((l) => [l.skillId, l.enabled]));
+      await this.replaceLinks(
+        tx,
+        agentId,
+        skillIds.map((skillId) => ({ skillId, enabled: enabled.get(skillId) ?? true })),
+      );
+    });
+  }
+
+  /** Replace the ordered skill set with flags (`PUT /agents/:id/skills`), in one transaction. */
+  async replaceSkills(agentId: string, items: AgentSkillEntry[]): Promise<void> {
+    await this.db.transaction((tx) => this.replaceLinks(tx, agentId, items));
+  }
+
+  private async replaceLinks(tx: DbOrTx, agentId: string, items: AgentSkillEntry[]): Promise<void> {
+    await tx.delete(t.agentSkills).where(eq(t.agentSkills.agentId, agentId));
+    if (items.length === 0) return;
+    await tx
       .insert(t.agentSkills)
-      .values(skillIds.map((skillId, i) => ({ agentId, skillId, order: i })));
+      .values(items.map((it, i) => ({ agentId, skillId: it.skillId, enabled: it.enabled, order: i })));
+  }
+
+  /** How many of `skillIds` exist in the workspace (tenancy check before linking). */
+  async countWorkspaceSkills(workspaceId: string, skillIds: string[]): Promise<number> {
+    if (skillIds.length === 0) return 0;
+    const [row] = await this.db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(t.skills)
+      .where(and(eq(t.skills.workspaceId, workspaceId), inArray(t.skills.id, skillIds)));
+    return Number(row?.n ?? 0);
+  }
+
+  /** Enabled skill links per agent of the workspace (`Agent.skills_count`). */
+  async enabledSkillCounts(workspaceId: string): Promise<Map<string, number>> {
+    const rows = await this.db
+      .select({ agentId: t.agentSkills.agentId, n: sql<number>`count(*)::int` })
+      .from(t.agentSkills)
+      .innerJoin(t.agents, eq(t.agents.id, t.agentSkills.agentId))
+      .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agentSkills.enabled, true)))
+      .groupBy(t.agentSkills.agentId);
+    return new Map(rows.map((r) => [r.agentId, Number(r.n)]));
   }
 }

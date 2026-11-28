@@ -21,6 +21,8 @@ export type ReviewRow = typeof t.reviews.$inferSelect;
 import * as reviewRepo from './repository/review.repo.js';
 import * as runRepo from './repository/run.repo.js';
 import * as pullRepo from './repository/pull.repo.js';
+import * as skillsRepo from './repository/skills.repo.js';
+export type { AgentPromptSkill, RunSkillRow } from './repository/skills.repo.js';
 
 export class ReviewRepository {
   constructor(private db: Db) {}
@@ -192,5 +194,17 @@ export class ReviewRepository {
 
   getRunTrace(runId: string): Promise<RunTrace | undefined> {
     return runRepo.getRunTrace(this.db, runId);
+  }
+
+  // ---- M2 skills in the prompt ------------------------------------------
+
+  /** Agent's skills with both `skills.enabled` and `agent_skills.enabled`, by order. */
+  listPromptSkillsForAgent(workspaceId: string, agentId: string): Promise<skillsRepo.AgentPromptSkill[]> {
+    return skillsRepo.listPromptSkillsForAgent(this.db, workspaceId, agentId);
+  }
+
+  /** Persist which skills (name, version, order, tokens) were in a run's prompt. */
+  insertRunSkills(runId: string, rows: skillsRepo.RunSkillRow[]): Promise<void> {
+    return skillsRepo.insertRunSkills(this.db, runId, rows);
   }
 }

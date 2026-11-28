@@ -20,11 +20,13 @@ export function Tabs({
         const label = typeof t === "string" ? t : t.label;
         const icon = typeof t === "object" ? t.icon : undefined;
         const on = value === k;
+        const disabled = typeof t === "object" && !!t.disabled;
         const I = icon ? Icon[icon] : null;
         return (
           <button
             key={k}
-            onClick={() => onChange(k)}
+            onClick={() => !disabled && onChange(k)}
+            disabled={disabled}
             style={{
               display: "flex",
               alignItems: "center",
@@ -34,7 +36,8 @@ export function Tabs({
               background: "transparent",
               borderBottom: "2px solid " + (on ? "var(--accent)" : "transparent"),
               marginBottom: -1,
-              cursor: "pointer",
+              cursor: disabled ? "not-allowed" : "pointer",
+              opacity: disabled ? 0.45 : 1,
               fontSize: 14,
               fontWeight: on ? 600 : 500,
               color: on ? "var(--text-primary)" : "var(--text-secondary)",

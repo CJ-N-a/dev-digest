@@ -1,4 +1,5 @@
 import type { ChatMessage, PromptAssembly } from '@devdigest/shared';
+import { approxTokens } from '@devdigest/shared';
 
 /**
  * Prompt assembly + prompt-injection hardening.
@@ -36,11 +37,32 @@ export function wrapUntrusted(label: string, content: string): string {
 /** Cap the PR description so a huge author body can't blow the token budget. */
 const MAX_PR_DESCRIPTION_CHARS = 4000;
 
+/**
+ * A resolved skill with its identity (M2). `text` is the full formatted block
+ * the caller wants in the prompt; `name`/`version` feed `assembly.skills_used`.
+ */
+export interface PromptSkill {
+  name: string;
+  version: number;
+  text: string;
+}
+
+/** A skill entry: a plain resolved body (legacy) or a structured skill. */
+export type SkillEntry = string | PromptSkill;
+
+function skillText(s: SkillEntry): string {
+  return typeof s === 'string' ? s : s.text;
+}
+
 export interface PromptParts {
   /** Agent's system prompt (trusted). */
   system: string;
-  /** Linked skill bodies (trusted-ish; community skills should be sanitized upstream). */
-  skills?: string[];
+  /**
+   * Linked skill bodies (trusted-ish; community skills should be sanitized
+   * upstream). Plain strings stay supported; structured entries additionally
+   * populate `assembly.skills_used`.
+   */
+  skills?: SkillEntry[];
   /** Relevant memory items (trusted, curated). */
   memory?: string[];
   /** Project-context spec chunks (untrusted content). */
@@ -86,7 +108,18 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
   const system = `${parts.system}\n\n${INJECTION_GUARD}`;
 
   const skillsBlock =
-    parts.skills && parts.skills.length > 0 ? parts.skills.join('\n\n') : undefined;
+    parts.skills && parts.skills.length > 0 ? parts.skills.map(skillText).join('\n\n') : undefined;
+  const structuredSkills = (parts.skills ?? []).filter(
+    (s): s is PromptSkill => typeof s !== 'string',
+  );
+  const skillsUsed =
+    structuredSkills.length > 0
+      ? structuredSkills.map((s) => ({
+          name: s.name,
+          version: s.version,
+          tokens: approxTokens(s.text),
+        }))
+      : null;
   const memoryBlock =
     parts.memory && parts.memory.length > 0
       ? parts.memory.map((m) => `- ${m}`).join('\n')
@@ -129,6 +162,8 @@ export function assemblePrompt(parts: PromptParts): AssembledPrompt {
   const assembly: PromptAssembly = {
     system,
     skills: skillsBlock ?? null,
+    skills_tokens: skillsBlock ? approxTokens(skillsBlock) : null,
+    skills_used: skillsUsed,
     memory: memoryBlock ?? null,
     specs: specsBlock ?? null,
     callers: parts.callers ?? null,

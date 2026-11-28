@@ -6,6 +6,10 @@ import {
   GENERAL_REVIEWER_PROMPT,
   SECURITY_REVIEWER_PROMPT,
   PERFORMANCE_REVIEWER_PROMPT,
+  TEST_QUALITY_REVIEWER_PROMPT,
+  API_CONTRACT_REVIEWER_PROMPT,
+  PR_QUALITY_RUBRIC_VERSIONS,
+  SKILL_BODIES,
 } from './seed-prompts.js';
 
 /** Default provider/model for the built-in reviewer agents. */
@@ -18,11 +22,16 @@ const DEFAULT_MODEL = 'deepseek/deepseek-v4-flash';
  *
  * Seeds: default workspace + system user + membership, default settings,
  * demo repo (acme/payments-api), PR #482 with files/commits, a sample review
- * with a few findings, and the three built-in agents (General + Security +
- * Performance), all on the default openrouter/deepseek-v4-flash provider+model.
+ * with a few findings, the five built-in agents (General, Security, Performance,
+ * Test Quality, API Contract) on the default openrouter/deepseek-v4-flash
+ * provider+model, and the M2 skills with their versions and agent links.
  *
- * Later milestones populate the other tables (skills, conventions, memory, eval,
- * …) once their features are built — they start empty here.
+ * Skills are looked up by (workspace, name) and links by (agent, skill), so a
+ * re-run never duplicates rows or overwrites a user's edits. The seed creates no
+ * runs, so skill Stats stay empty until the first real review.
+ *
+ * Later milestones populate the other tables (conventions, memory, eval, …) once
+ * their features are built — they start empty here.
  */
 
 export const DEFAULT_WORKSPACE_NAME = 'default';
@@ -211,6 +220,28 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
       version: 1,
       createdBy: userId,
     },
+    {
+      workspaceId,
+      name: 'Test Quality Reviewer',
+      description: 'Flags uncovered branches, missing corner cases, over-mocking and flaky tests.',
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+      systemPrompt: TEST_QUALITY_REVIEWER_PROMPT,
+      enabled: true,
+      version: 1,
+      createdBy: userId,
+    },
+    {
+      workspaceId,
+      name: 'API Contract Reviewer',
+      description: 'Catches breaking changes in route signatures, schemas, status codes and response fields.',
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+      systemPrompt: API_CONTRACT_REVIEWER_PROMPT,
+      enabled: true,
+      version: 1,
+      createdBy: userId,
+    },
   ];
   for (const a of seedAgents) {
     const [existing] = await db
@@ -220,7 +251,206 @@ export async function seed(db: Db): Promise<{ workspaceId: string; userId: strin
     if (!existing) await db.insert(t.agents).values(a);
   }
 
+  await seedSkills(db, workspaceId);
+
   return { workspaceId, userId };
+}
+
+// ---- skills (M2) ----
+
+type SkillRow = typeof t.skills.$inferInsert;
+type SeedSkill = Omit<SkillRow, 'workspaceId' | 'version'> & {
+  /** Snapshots oldest first; the last one is the current body. Default: one "Initial version". */
+  versions?: Array<{ body: string; message: string; description?: string }>;
+};
+
+const RUBRIC_MESSAGES = [
+  'Initial rubric',
+  'Added Security dimension',
+  'Reworded Correctness checks',
+  'Added Tests dimension',
+  'Tightened scope rule; cap at 5 high-signal findings',
+] as const;
+const RUBRIC_DESCRIPTION =
+  'Apply to every PR review: report a finding only when the change fails a Correctness, Security, Tests or Scope check, and keep the review to the few issues a senior reviewer would raise.';
+// v1 had only Correctness + Scope; the description grew with the rubric.
+const RUBRIC_DESCRIPTIONS = [
+  'Apply to every PR review: report a finding only when the change fails a Correctness or Scope check.',
+  'Apply to every PR review: report a finding only when the change fails a Correctness, Security or Scope check.',
+  'Apply to every PR review: report a finding only when the change fails a Correctness, Security or Scope check.',
+  RUBRIC_DESCRIPTION,
+  RUBRIC_DESCRIPTION,
+] as const;
+
+const SEED_SKILLS: SeedSkill[] = [
+  {
+    name: 'pr-quality-rubric',
+    description: RUBRIC_DESCRIPTION,
+    type: 'rubric',
+    source: 'manual',
+    body: PR_QUALITY_RUBRIC_VERSIONS[PR_QUALITY_RUBRIC_VERSIONS.length - 1]!,
+    versions: PR_QUALITY_RUBRIC_VERSIONS.map((body, i) => ({
+      body,
+      message: RUBRIC_MESSAGES[i]!,
+      description: RUBRIC_DESCRIPTIONS[i]!,
+    })),
+  },
+  {
+    name: 'no-then-chains',
+    description:
+      'When the diff adds asynchronous code, flag new .then()/.catch() promise chains and require async/await with try/catch instead.',
+    type: 'convention',
+    source: 'extracted',
+    body: SKILL_BODIES['no-then-chains'],
+    evidenceFiles: ['src/api/public/webhooks.ts', 'src/services/refunds.ts', 'src/jobs/payout-sync.ts'],
+  },
+  {
+    name: 'secret-leakage-gate',
+    description:
+      'When the diff adds literals, config, logging or fixtures, block any real credential committed to code and flag secrets written to logs, errors or responses.',
+    type: 'security',
+    source: 'community',
+    body: SKILL_BODIES['secret-leakage-gate'],
+  },
+  {
+    name: 'lethal-trifecta',
+    description:
+      'When the diff touches an LLM or agent flow, report a lethal trifecta only if untrusted input, private-data access and an exfiltration path meet in one flow, each with a file:line.',
+    type: 'security',
+    source: 'community',
+    body: SKILL_BODIES['lethal-trifecta'],
+  },
+  {
+    name: 'phantom-api-gate',
+    description:
+      'When the diff adds imports or third-party calls, flag packages, methods or endpoints that do not exist according to the dependencies and code shown.',
+    type: 'security',
+    source: 'imported_url',
+    enabled: false,
+    body: SKILL_BODIES['phantom-api-gate'],
+  },
+  {
+    name: 'test-coverage-nudge',
+    description:
+      'When the diff adds branching behaviour without a test, leave one SUGGESTION per untested unit naming the test to write; never block on it.',
+    type: 'custom',
+    source: 'manual',
+    body: SKILL_BODIES['test-coverage-nudge'],
+  },
+  {
+    name: 'branch-coverage-gate',
+    description:
+      'When the diff changes logic, list every new branch and report each one that no test executes and asserts, citing the branch line and an input that reaches it.',
+    type: 'rubric',
+    source: 'manual',
+    body: SKILL_BODIES['branch-coverage-gate'],
+  },
+  {
+    name: 'corner-case-checklist',
+    description:
+      'When the diff adds a comparison or reads an input, check boundaries, empty values, size and time edges, and report each case neither handled nor tested.',
+    type: 'rubric',
+    source: 'manual',
+    body: SKILL_BODIES['corner-case-checklist'],
+  },
+  {
+    name: 'mocking-discipline',
+    description:
+      'When the diff adds or changes tests, flag mocks of the unit under test, assertions only on mocks, mocked DB/HTTP in contract tests and mocks that leak between tests.',
+    type: 'convention',
+    source: 'manual',
+    body: SKILL_BODIES['mocking-discipline'],
+  },
+  {
+    name: 'route-signature-diff',
+    description:
+      'When the diff touches an HTTP route, compare method, path, params, body, response and status codes before and after, and report each element an existing client can no longer use.',
+    type: 'rubric',
+    source: 'manual',
+    body: SKILL_BODIES['route-signature-diff'],
+  },
+  {
+    name: 'schema-compat-rules',
+    description:
+      'When the diff changes a Zod contract or route schema, classify each change as compatible or breaking for input and output, and report the breaking ones.',
+    type: 'convention',
+    source: 'manual',
+    body: SKILL_BODIES['schema-compat-rules'],
+  },
+];
+
+/** Ordered skill links per agent; `enabled: false` keeps the link but off. */
+const SEED_AGENT_SKILLS: Record<string, Array<{ skill: string; enabled?: boolean }>> = {
+  'Security Reviewer': [
+    { skill: 'pr-quality-rubric' },
+    { skill: 'secret-leakage-gate' },
+    { skill: 'lethal-trifecta' },
+    { skill: 'phantom-api-gate', enabled: false },
+  ],
+  'Performance Reviewer': [{ skill: 'pr-quality-rubric' }, { skill: 'no-then-chains' }],
+  'Test Quality Reviewer': [
+    { skill: 'branch-coverage-gate' },
+    { skill: 'corner-case-checklist' },
+    { skill: 'mocking-discipline' },
+    { skill: 'test-coverage-nudge' },
+  ],
+  'API Contract Reviewer': [
+    { skill: 'route-signature-diff' },
+    { skill: 'schema-compat-rules' },
+    { skill: 'pr-quality-rubric' },
+  ],
+};
+
+async function seedSkills(db: Db, workspaceId: string): Promise<void> {
+  const skillIds = new Map<string, string>();
+
+  for (const { versions: history, ...s } of SEED_SKILLS) {
+    const versions = history ?? [{ body: s.body, message: 'Initial version' }];
+    // Insert-if-missing, then look up: never overwrites a skill the user edited.
+    await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(t.skills)
+        .values({ ...s, workspaceId, version: versions.length })
+        .onConflictDoNothing({ target: [t.skills.workspaceId, t.skills.name] })
+        .returning({ id: t.skills.id });
+      if (!created) return;
+      await tx.insert(t.skillVersions).values(
+        versions.map((v, i) => ({
+          skillId: created.id,
+          version: i + 1,
+          body: v.body,
+          message: v.message,
+          name: s.name,
+          description: v.description ?? s.description,
+          type: s.type,
+        })),
+      );
+    });
+    const [row] = await db
+      .select({ id: t.skills.id })
+      .from(t.skills)
+      .where(and(eq(t.skills.workspaceId, workspaceId), eq(t.skills.name, s.name)));
+    skillIds.set(s.name, row!.id);
+  }
+
+  for (const [agentName, links] of Object.entries(SEED_AGENT_SKILLS)) {
+    const [agent] = await db
+      .select({ id: t.agents.id })
+      .from(t.agents)
+      .where(and(eq(t.agents.workspaceId, workspaceId), eq(t.agents.name, agentName)));
+    if (!agent) continue;
+    await db
+      .insert(t.agentSkills)
+      .values(
+        links.map((l, order) => ({
+          agentId: agent.id,
+          skillId: skillIds.get(l.skill)!,
+          order,
+          enabled: l.enabled ?? true,
+        })),
+      )
+      .onConflictDoNothing();
+  }
 }
 
 // CLI entrypoint

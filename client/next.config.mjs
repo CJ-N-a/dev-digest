@@ -32,6 +32,16 @@ const csp = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // `@devdigest/shared` (src/vendor/shared) is server-style ESM TS: it imports
+  // siblings as `./x.js`. Let webpack resolve those to the `.ts` sources so the
+  // client can import runtime values (schemas, helpers), not just types.
+  webpack(config) {
+    config.resolve.extensionAlias = {
+      ...config.resolve.extensionAlias,
+      ".js": [".ts", ".tsx", ".js"],
+    };
+    return config;
+  },
   env: {
     NEXT_PUBLIC_API_BASE: API_BASE,
   },

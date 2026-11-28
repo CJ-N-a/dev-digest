@@ -135,4 +135,51 @@ describe('reviewPullRequest (engine)', () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((s) => s === 'sess-abc')).toBe(true);
   });
+  it('map-reduce: skills go into EVERY per-file call and land in the assembly', async () => {
+    const users: string[] = [];
+    const recorder: LLMProvider = {
+      id: 'openrouter',
+      async completeStructured<T>(req): Promise<StructuredResult<T>> {
+        users.push(req.messages.find((m) => m.role === 'user')!.content);
+        return {
+          data: { verdict: 'approve', summary: 'ok', score: 100, findings: [] } as unknown as T,
+          model: req.model,
+          tokensIn: 0,
+          tokensOut: 0,
+          costUsd: 0,
+          raw: '',
+          attempts: 1,
+        };
+      },
+      async listModels() {
+        return [];
+      },
+      async complete() {
+        throw new Error('not used');
+      },
+      async embed() {
+        return [];
+      },
+    };
+    const twoFiles =
+      'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,2 @@\n x\n+a\n' +
+      'diff --git a/src/b.ts b/src/b.ts\n--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1,1 +1,2 @@\n y\n+b';
+    const diff = await new MockGitClient({ diff: twoFiles }).diff();
+    expect(diff.files.length).toBe(2);
+    const outcome = await reviewPullRequest({
+      systemPrompt: 's',
+      model: 'm',
+      diff,
+      llm: recorder,
+      strategy: 'map-reduce',
+      skills: [{ name: 'no-secrets', version: 3, text: 'SKILL-MARKER body' }],
+    });
+    expect(outcome.mode).toBe('map-reduce');
+    expect(users).toHaveLength(diff.files.length);
+    expect(users.every((u) => u.includes('## Skills / rules\nSKILL-MARKER body'))).toBe(true);
+    expect(outcome.assembly.skills_used).toEqual([
+      { name: 'no-secrets', version: 3, tokens: Math.ceil('SKILL-MARKER body'.length / 4) },
+    ]);
+    expect(outcome.assembly.skills_tokens).toBe(Math.ceil('SKILL-MARKER body'.length / 4));
+  });
 });

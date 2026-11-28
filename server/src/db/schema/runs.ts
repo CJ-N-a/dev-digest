@@ -1,7 +1,8 @@
-import { pgTable, uuid, text, integer, jsonb, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, jsonb, timestamp, index, primaryKey } from 'drizzle-orm/pg-core';
 import { workspaces } from './core';
 import { agents } from './agents';
 import { pullRequests } from './pulls';
+import { skills } from './skills';
 
 // ============================================================ Observability
 
@@ -32,6 +33,28 @@ export const agentRuns = pgTable('agent_runs', {
   prIdx: index('agent_runs_pr_idx').on(t.prId),
   wsIdx: index('agent_runs_ws_idx').on(t.workspaceId),
 }));
+
+/**
+ * M2 — skills that went into a run's prompt (name + version kept even after
+ * the skill is deleted). Feeds skill Stats and run reproducibility.
+ */
+export const agentRunSkills = pgTable(
+  'agent_run_skills',
+  {
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: 'cascade' }),
+    skillId: uuid('skill_id').references(() => skills.id, { onDelete: 'set null' }),
+    skillName: text('skill_name').notNull(),
+    skillVersion: integer('skill_version').notNull(),
+    order: integer('order').notNull(),
+    tokens: integer('tokens').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.runId, t.order] }),
+    skillIdx: index('agent_run_skills_skill_idx').on(t.skillId),
+  }),
+);
 
 /** Whole trace of one run as a SINGLE jsonb document. */
 export const runTraces = pgTable('run_traces', {
